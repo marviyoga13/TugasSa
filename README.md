@@ -1,168 +1,116 @@
-# TugasSa
-# Marvi Yoga Pratama
-# 1227050070
-
-package es.usc.citius.hipster.algorithm;
-
-import es.usc.citius.hipster.model.Node;
-import es.usc.citius.hipster.model.function.NodeExpander;
-
-import java.util.HashSet;
-import java.util.Set;
-import java.util.Stack;
-
-public class DepthFirstSearch<A,S,N extends Node<A,S,N>> extends Algorithm<A,S,N> {
-    private N initialNode;
-    private NodeExpander<A,S,N> expander;
-
-    // TODO; DRY common structures with other algorithms (like IDA)
-
-    public DepthFirstSearch(N initialNode, NodeExpander<A, S, N> expander) {
-        this.expander = expander;
-        this.initialNode = initialNode;
-    }
-
-    private class StackFrameNode {
-        // Iterable used to compute neighbors of the current node
-        java.util.Iterator<N> successors;
-        // Current search node
-        N node;
-        // Boolean value to check if the node is still unvisited
-        // in the stack or not
-        boolean visited = false;
-        // Boolean to indicate that this node is fully processed
-        boolean processed = false;
-
-        StackFrameNode(java.util.Iterator successors, N node) {
-            this.successors = successors;
-            this.node = node;
-        }
-
-        StackFrameNode(N node) {
-            this.node = node;
-            this.successors = expander.expand(node).iterator();
-        }
-    }
-
-    public class Iterator implements java.util.Iterator<N> {
-        private Stack<StackFrameNode> stack = new Stack<StackFrameNode>();
-        private StackFrameNode next;
-        private Set<S> closed = new HashSet<S>();
-        private boolean graphSupport = true;
-
-        private Iterator(){
-            this.stack.add(new StackFrameNode(initialNode));
-        }
-
-
-        @Override
-        public boolean hasNext() {
-            if (next == null){
-                // Compute next
-                next = nextUnvisited();
-                if (next == null) return false;
-            }
-            return true;
-        }
-
-        @Override
-        public N next(){
-            if (next != null){
-                StackFrameNode e = next;
-                // Compute the next one
-                next = null;
-                // Return current node
-                return e.node;
-            }
-            // Compute next
-            StackFrameNode nextUnvisited = nextUnvisited();
-            if (nextUnvisited!=null){
-                return nextUnvisited.node;
-            }
-            return null;
-
-        }
-
-        @Override
-        public void remove() {
-            throw new UnsupportedOperationException();
-        }
-
-
-        private StackFrameNode nextUnvisited(){
-            StackFrameNode nextNode;
-            do {
-                nextNode = processNextNode();
-            } while(nextNode != null && (nextNode.processed || nextNode.visited || closed.contains(nextNode.node.state())));
-
-            if (nextNode != null){
-                nextNode.visited = true;
-                // For graphs, the DFS needs to keep track of all nodes
-                // that were processed and removed from the stack, in order
-                // to avoid cycles.
-                if (graphSupport) closed.add(nextNode.node.state());
-            }
-            return nextNode;
-        }
-
-
-        private StackFrameNode processNextNode(){
-
-            if (stack.isEmpty()) return null;
-
-            // Take current node in the stack but do not remove
-            StackFrameNode current = stack.peek();
-            // Find a successor
-            if (current.successors.hasNext()){
-                N successor = current.successors.next();
-                // push the node (if not explored)
-                if (!graphSupport || !closed.contains(successor.state())) {
-                    stack.add(new StackFrameNode(successor));
-                }
-                return current;
-            } else {
-                // Visited?
-                if (current.visited){
-                    current.processed = true;
-                }
-                return stack.pop();
-            }
-        }
-
-        public Stack<StackFrameNode> getStack() {
-            return stack;
-        }
-
-        public void setStack(Stack<StackFrameNode> stack) {
-            this.stack = stack;
-        }
-
-        public StackFrameNode getNext() {
-            return next;
-        }
-
-        public void setNext(StackFrameNode next) {
-            this.next = next;
-        }
-
-        public Set<S> getClosed() {
-            return closed;
-        }
-
-        public void setClosed(Set<S> closed) {
-            this.closed = closed;
-        }
-
-        public boolean isGraphSupport() {
-            return graphSupport;
-        }
-
-        public void setGraphSupport(boolean graphSupport) {
-            this.graphSupport = graphSupport;
-        }
-    }
-    @Override
-    public java.util.Iterator<N> iterator() {
-        return new Iterator();
-    }
-}
+import argparse
+import os
+import os.path as osp
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader
+from torch.autograd import Variable
+import random
+import pdb
+import math
+from distutils.version import LooseVersion
+import network.network as network
+import utils.loss as loss
+import utils.lr_schedule as lr_schedule
+import dataset.preprocess as prep
+from dataset.dataloader import ImageList
+from scripts.train_uda import train_uda
+from scripts.train_ssda import train_ssda
+from scripts.train_msda import train_msda
+if __name__ == "__main__":
+    #parameters
+    assert LooseVersion(torch.__version__) >= LooseVersion('1.0.0'), 'PyTorch>=1.0.0 is required'
+    parser = argparse.ArgumentParser(description='Domain Adaptation')
+    parser.add_argument('--task', type=str, default='UDA', help="select the task(UDA, SSDA, MSDA)")
+    parser.add_argument('--gpu_id', type=str, nargs='?', default='0', help="device id to run")
+    parser.add_argument('--net', type=str, default='ResNet50', help="Options: ResNet50")
+    parser.add_argument('--dset', type=str, default='office-home', help="The dataset or source dataset used")
+    parser.add_argument('--s_dset_path', type=str, default='data/Art.txt', help="The source dataset path list")
+    parser.add_argument('--t_dset_path', type=str, default='data/Clipart.txt', help="The target dataset path list")
+    parser.add_argument('--output_dir', type=str, default='san', help="output directory of our model (in ../snapshot directory)")
+    parser.add_argument('--test_interval', type=int, default=500, help="interval of two continuous test phase")
+    parser.add_argument('--snapshot_interval', type=int, default=5000, help="interval of two continuous output model")
+    parser.add_argument('--print_num', type=int, default=100, help="interval of two print loss")
+    parser.add_argument('--num_iterations', type=int, default=6002, help="interation num ")
+    parser.add_argument('--lr', type=float, default=0.001, help="learning rate")
+    parser.add_argument('--trade_off', type=float, default=1, help="parameter for transfer loss")
+    parser.add_argument('--batch_size', type=int, default=36, help="batch size")
+    parser.add_argument('--seed', type=int, default=0, help="batch size")
+    parser.add_argument('--heuristic_num', type=int, default=1, help="number of heuristic subnetworks")
+    parser.add_argument('--heuristic_initial', type=bool, default=False, help="number of heuristic subnetworks")
+    parser.add_argument('--heuristic', type=float, default=1, help="lambda: parameter for heuristic (if lambda==0 then heuristic is not utilized)")
+    parser.add_argument('--gauss', type=float, default=0, help="utilize different initialization or not)")
+    parser.add_argument('--num_labels', type=int, default=1, help="parameter for SSDA")
+@@ -75,7 +76,7 @@
+    config["loss"] = {"trade_off":args.trade_off}
+    if "ResNet" in args.net:
+        config["network"] = {"name":network.ResNetFc, \
+            "params":{"resnet_name":args.net, "bottleneck_dim":256, "new_cls":True, "heuristic_num":args.heuristic_num} }
+            "params":{"resnet_name":args.net, "bottleneck_dim":256, "new_cls":True, "heuristic_num":args.heuristic_num, "heuristic_initial":args.heuristic_initial} }
+    else:
+        raise ValueError('Network cannot be recognized. Please define your own dataset here.')
+         config["optimizer"] = {"type":optim.SGD, "optim_params":{'lr':args.lr, "momentum":0.9, \
+                           "weight_decay":0.0005, "nesterov":True}, "lr_type":"inv", \
+                           "lr_param":{"lr":args.lr, "gamma":0.001, "power":0.75} }
+    config["dataset"] = args.dset
+    if config["dataset"] == "office-home":
+        config["optimizer"]["lr_param"]["lr"] = 0.001 # optimal parameters
+        config["network"]["params"]["class_num"] = 65
+    elif config["dataset"] == "office":
+        seed = 2019
+        if   ("webcam" in args.s_dset_path and "amazon" in args.t_dset_path) or \
+             ("dslr" in args.s_dset_path and "amazon" in args.t_dset_path):
+             config["optimizer"]["lr_param"]["lr"] = 0.001 # optimal parameters
+        elif ("amazon" in args.s_dset_path and "webcam" in args.t_dset_path) or \
+             ("amazon" in args.s_dset_path and "dslr" in args.t_dset_path) or \
+             ("webcam" in args.s_dset_path and "dslr" in args.t_dset_path) or \
+             ("dslr" in args.s_dset_path and "webcam" in args.t_dset_path):
+             config["optimizer"]["lr_param"]["lr"] = 0.0003 # optimal parameters
+        config["network"]["params"]["class_num"] = 31
+    elif config["dataset"] == "visda":
+    seed = 9297
+        config["optimizer"]["lr_param"]["lr"] = 0.0003 # optimal parameters
+        config["network"]["params"]["class_num"] = 12
+    elif config["dataset"] == "domainnet":
+        config["network"]["params"]["class_num"] = 345
+        #config["optimizer"]["lr_param"]["lr"] = 0.001 # optimal parameters
+        config["optimizer"]["lr_param"]["lr"] = args.lr # optimal parameters
+    else:
+        raise ValueError('Dataset cannot be recognized. Please define your own dataset here.')
+    if args.seed:
+        seed = args.seed
+    else:
+        seed = random.randint(1,10000)
+    print(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    config["out_file"].write(str(config))
+    config["out_file"].flush()
+    if args.task== "UDA":
+        config["data"] = {"source":{"list_path":args.s_dset_path, "batch_size":args.batch_size}, \
+                      "target":{"list_path":args.t_dset_path, "batch_size":args.batch_size}, \
+                      "test":{"list_path":args.t_dset_path, "batch_size":args.batch_size}}
+        train_uda(config)
+    elif args.task== "SSDA":
+        config["network"]["params"]["class_num"] = 126
+        target_path = args.t_dset_path.replace('.txt','_'+str(args.num_labels)+'.txt')
+        config["data"] = {"source":{"list_path":args.s_dset_path, "batch_size":args.batch_size}, \
+                      "target1":{"list_path":target_path, "batch_size":args.batch_size}, \
+                      "target2":{"list_path":target_path.replace('labeled', 'unlabeled'), "batch_size":args.batch_size}, \
+                      "test":{"list_path":target_path.replace('labeled','unlabeled'), "batch_size":args.batch_size}}
+        train_ssda(config)
+    elif args.task== "MSDA":
+        config["data"] = {"target":{"list_path":args.t_dset_path, "batch_size":args.batch_size}, \
+                      "test":{"list_path":args.t_dset_path.replace('train','test'), "batch_size":args.batch_size*2}}
+ config["data_list"] = ["data/MSDA_domainnet/clipart_train.txt","data/MSDA_domainnet/infograph_train.txt","data/MSDA_domainnet/painting_train.txt","data/MSDA_domainnet/quickdraw_train.txt","data/MSDA_domainnet/real_train.txt","data/MSDA_domainnet/sketch_train.txt"]
+        train_msda(config)
+    else:
+        print("GG")
+        print("Please choose the correct task")
